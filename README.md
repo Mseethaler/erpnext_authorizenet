@@ -13,7 +13,7 @@ Built by [Digital Sovereignty](https://digital-sovereignty.cc) as a drop-in comp
 
 ```bash
 # From your bench directory
-bench get-app https://github.com/digital-sovereignty/erpnext_authorizenet
+bench get-app https://github.com/Mseethaler/erpnext_authorizenet
 bench --site <yoursite> install-app erpnext_authorizenet
 bench --site <yoursite> migrate
 ```
