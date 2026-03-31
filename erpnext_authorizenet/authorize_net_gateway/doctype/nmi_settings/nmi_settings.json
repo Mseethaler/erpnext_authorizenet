@@ -1,0 +1,112 @@
+{
+ "actions": [],
+ "creation": "2024-01-01 00:00:00.000000",
+ "doctype": "DocType",
+ "document_type": "Other",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "gateway_name",
+  "column_break_1",
+  "sandbox_mode",
+  "section_break_credentials",
+  "security_key",
+  "column_break_credentials",
+  "public_key",
+  "section_break_display",
+  "header_image",
+  "column_break_display",
+  "redirect_url"
+ ],
+ "fields": [
+  {
+   "fieldname": "gateway_name",
+   "fieldtype": "Data",
+   "label": "Gateway Name",
+   "reqd": 1,
+   "default": "NMI",
+   "description": "A unique name for this NMI gateway instance."
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "sandbox_mode",
+   "fieldtype": "Check",
+   "label": "Sandbox Mode",
+   "default": "1",
+   "description": "Enable for testing with NMI sandbox credentials. Disable for live transactions."
+  },
+  {
+   "fieldname": "section_break_credentials",
+   "fieldtype": "Section Break",
+   "label": "API Credentials"
+  },
+  {
+   "fieldname": "security_key",
+   "fieldtype": "Password",
+   "label": "Security Key",
+   "reqd": 1,
+   "description": "Your NMI API Security Key. Found in NMI gateway portal under Settings > Security Keys."
+  },
+  {
+   "fieldname": "column_break_credentials",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "public_key",
+   "fieldtype": "Data",
+   "label": "Public Key (Tokenization)",
+   "description": "Optional. Required if using NMI's Collect.js for client-side tokenization."
+  },
+  {
+   "fieldname": "section_break_display",
+   "fieldtype": "Section Break",
+   "label": "Appearance"
+  },
+  {
+   "fieldname": "header_image",
+   "fieldtype": "Attach Image",
+   "label": "Header Image",
+   "description": "Optional logo displayed on the payment page."
+  },
+  {
+   "fieldname": "column_break_display",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "redirect_url",
+   "fieldtype": "Data",
+   "label": "Redirect URL",
+   "description": "Optional URL to redirect to after payment. Leave blank to use ERPNext default."
+  }
+ ],
+ "icon": "fa fa-credit-card",
+ "is_single": 0,
+ "links": [],
+ "modified": "2024-01-01 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Authorize Net Gateway",
+ "name": "NMI Settings",
+ "naming_rule": "By fieldname",
+ "autoname": "field:gateway_name",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "track_changes": 0
+}
