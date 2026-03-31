@@ -1,1 +1,1 @@
-Payment Gateways
+Authorize Net Gateway
