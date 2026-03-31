@@ -40,7 +40,7 @@ The flow mirrors the Stripe integration exactly:
 
 ```json
 {
-  "url": "https://github.com/digital-sovereignty/erpnext_authorizenet",
+  "url": "https://github.com/Mseethaler/erpnext_authorizenet",
   "branch": "main"
 }
 ```
