@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<!--
+  authorizenet_communicator.html
+
+  This file MUST be hosted at the exact URL you pass in hostedPaymentIFrameCommunicatorUrl.
+  It is loaded by Authorize.Net inside a hidden iframe to relay postMessage events
+  (resize, cancel, successfulSave) from the Authorize.Net domain to your parent page.
+
+  Do not modify the script below — it is specified by Authorize.Net's Accept Hosted documentation.
+
+  Deploy path (relative to your site's web root):
+    /assets/erpnext_authorizenet/js/authorizenet_communicator.html
+
+  Authorize.Net docs:
+    https://developer.authorize.net/api/reference/features/accept-hosted.html
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Communicator</title>
+</head>
+<body>
+  <script>
+    // Relay messages from Authorize.Net's payment domain to the parent window
+    (function () {
+      "use strict";
+
+      var query = {};
+      var pairs = window.location.search.substring(1).split("&");
+      for (var i = 0; i < pairs.length; i++) {
+        var pair = pairs[i].split("=");
+        query[decodeURIComponent(pair[0])] = decodeURIComponent(pair[1] || "");
+      }
+
+      // Relay the action and any parameters to the top-level parent page
+      if (window.parent && window.parent.parent) {
+        window.parent.parent.postMessage(JSON.stringify(query), "*");
+      }
+    })();
+  </script>
+</body>
+</html>

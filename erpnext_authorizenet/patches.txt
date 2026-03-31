@@ -1,0 +1,3 @@
+# Patches are run in order during `bench migrate`.
+# Format: app.patches.patch_module_name
+# Example: erpnext_authorizenet.patches.v1_0.rename_field

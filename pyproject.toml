@@ -1,0 +1,12 @@
+[project]
+name = "erpnext_authorizenet"
+authors = [
+    {name = "Digital Sovereignty", email = "service@digital-sovereignty.cc"}
+]
+description = "Authorize.Net and NMI payment gateway integration for ERPNext"
+requires-python = ">=3.10"
+readme = "README.md"
+dynamic = ["version"]
+
+[tool.flit.module]
+name = "erpnext_authorizenet"

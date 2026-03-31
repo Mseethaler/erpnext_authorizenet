@@ -1,0 +1,268 @@
+{% extends "templates/web.html" %}
+
+{% block title %}{{ _("Secure Payment") }}{% endblock %}
+
+{% block head_include %}
+<style>
+  body {
+    background: #f5f5f5;
+  }
+
+  .payment-wrapper {
+    max-width: 520px;
+    margin: 40px auto;
+    padding: 0 16px 60px;
+  }
+
+  .payment-header {
+    text-align: center;
+    margin-bottom: 24px;
+  }
+
+  .payment-header img {
+    max-height: 60px;
+    margin-bottom: 12px;
+  }
+
+  .payment-header h2 {
+    font-size: 1.3rem;
+    font-weight: 600;
+    color: #1a1a1a;
+    margin: 0 0 4px;
+  }
+
+  .payment-header .payment-subtext {
+    color: #666;
+    font-size: 0.95rem;
+  }
+
+  .payment-amount-card {
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    padding: 18px 24px;
+    margin-bottom: 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .payment-amount-card .label {
+    color: #555;
+    font-size: 0.9rem;
+  }
+
+  .payment-amount-card .amount {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #1a1a1a;
+  }
+
+  .payment-amount-card .currency {
+    font-size: 0.85rem;
+    color: #888;
+    margin-left: 4px;
+  }
+
+  .iframe-card {
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    overflow: hidden;
+    min-height: 420px;
+  }
+
+  #authorize-net-iframe {
+    width: 100%;
+    min-height: 420px;
+    border: none;
+    display: block;
+  }
+
+  .sandbox-badge {
+    display: inline-block;
+    background: #fff3cd;
+    color: #856404;
+    border: 1px solid #ffc107;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    padding: 2px 8px;
+    margin-top: 8px;
+  }
+
+  .secure-note {
+    text-align: center;
+    color: #888;
+    font-size: 0.8rem;
+    margin-top: 14px;
+  }
+
+  .secure-note svg {
+    vertical-align: middle;
+    margin-right: 4px;
+  }
+
+  .loading-overlay {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 420px;
+    color: #888;
+    gap: 14px;
+  }
+
+  .spinner {
+    width: 36px;
+    height: 36px;
+    border: 3px solid #e0e0e0;
+    border-top-color: #1a73e8;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  .cancelled-card {
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    padding: 40px 24px;
+    text-align: center;
+  }
+
+  .cancelled-card h3 {
+    color: #c62828;
+    margin-bottom: 8px;
+  }
+
+  .cancelled-card p {
+    color: #555;
+  }
+
+  .cancelled-card a {
+    display: inline-block;
+    margin-top: 16px;
+    color: #1a73e8;
+    text-decoration: none;
+  }
+</style>
+{% endblock %}
+
+{% block page_content %}
+<div class="payment-wrapper">
+
+  {% if cancelled %}
+  <div class="payment-header">
+    <h2>{{ _("Payment Cancelled") }}</h2>
+  </div>
+  <div class="cancelled-card">
+    <h3>{{ _("Payment was not completed") }}</h3>
+    <p>{{ _("No charge was made. You may close this page or return to try again.") }}</p>
+    <a href="javascript:history.back()">← {{ _("Go back") }}</a>
+  </div>
+
+  {% else %}
+
+  <div class="payment-header">
+    <h2>{{ _("Complete Your Payment") }}</h2>
+    <div class="payment-subtext">{{ description }}</div>
+    {% if sandbox_mode %}
+    <span class="sandbox-badge">⚠ Sandbox / Test Mode</span>
+    {% endif %}
+  </div>
+
+  <div class="payment-amount-card">
+    <span class="label">{{ _("Amount Due") }}</span>
+    <span>
+      <span class="amount">{{ frappe.utils.fmt_money(amount, currency=currency) }}</span>
+    </span>
+  </div>
+
+  <div class="iframe-card" id="iframe-card">
+    <div class="loading-overlay" id="loading-overlay">
+      <div class="spinner"></div>
+      <span>{{ _("Loading secure payment form…") }}</span>
+    </div>
+    <iframe
+      id="authorize-net-iframe"
+      name="authorize-net-iframe"
+      src=""
+      style="display:none;"
+      scrolling="no"
+    ></iframe>
+  </div>
+
+  <div class="secure-note">
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+      <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+    </svg>
+    {{ _("Payment secured by Authorize.Net. Your card details never touch our servers.") }}
+  </div>
+
+  {% endif %}
+
+</div>
+
+{# Hidden form that POSTs to Authorize.Net to get the iframe token loaded #}
+{% if not cancelled %}
+<form
+  id="authnet-form"
+  method="POST"
+  action="{{ hosted_form_url }}"
+  target="authorize-net-iframe"
+  style="display:none;"
+>
+  <input type="hidden" name="token" value="{{ token }}" />
+</form>
+
+<script>
+  (function () {
+    // Submit the hidden form to load the hosted payment page into the iframe
+    var form = document.getElementById("authnet-form");
+    var iframe = document.getElementById("authorize-net-iframe");
+    var overlay = document.getElementById("loading-overlay");
+
+    form.submit();
+
+    // Once the iframe begins loading, show it and hide the spinner
+    iframe.addEventListener("load", function () {
+      overlay.style.display = "none";
+      iframe.style.display = "block";
+    });
+
+    // Fallback: show iframe after 3 seconds regardless
+    setTimeout(function () {
+      overlay.style.display = "none";
+      iframe.style.display = "block";
+    }, 3000);
+
+    // Listen for resize messages from Authorize.Net communicator
+    // so the iframe height adjusts dynamically
+    window.addEventListener("message", function (event) {
+      if (event.data && typeof event.data === "string") {
+        try {
+          var msg = JSON.parse(event.data);
+          if (msg.action === "resize") {
+            iframe.style.height = msg.height + "px";
+            iframe.style.minHeight = msg.height + "px";
+          }
+          // Authorize.Net sends "successfulSave" when payment completes
+          // The redirect is handled server-side via the return URL we set,
+          // but we can show a brief message here as a fallback.
+          if (msg.action === "successfulSave" || msg.action === "cancel") {
+            // Handled by Authorize.Net redirect — no action needed client-side
+          }
+        } catch (e) {
+          // Non-JSON postMessage from another origin — ignore
+        }
+      }
+    }, false);
+  })();
+</script>
+{% endif %}
+
+{% endblock %}
