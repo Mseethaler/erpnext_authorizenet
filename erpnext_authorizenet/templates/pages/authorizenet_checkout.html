@@ -69,12 +69,12 @@
     border: 1px solid #e0e0e0;
     border-radius: 8px;
     overflow: hidden;
-    min-height: 420px;
+    min-height: 500px;
   }
 
   #authorize-net-iframe {
     width: 100%;
-    min-height: 420px;
+    height: 500px;
     border: none;
     display: block;
   }
@@ -100,29 +100,6 @@
   .secure-note svg {
     vertical-align: middle;
     margin-right: 4px;
-  }
-
-  .loading-overlay {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    min-height: 420px;
-    color: #888;
-    gap: 14px;
-  }
-
-  .spinner {
-    width: 36px;
-    height: 36px;
-    border: 3px solid #e0e0e0;
-    border-top-color: #1a73e8;
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-  }
-
-  @keyframes spin {
-    to { transform: rotate(360deg); }
   }
 
   .cancelled-card {
@@ -182,15 +159,10 @@
   </div>
 
   <div class="iframe-card" id="iframe-card">
-    <div class="loading-overlay" id="loading-overlay">
-      <div class="spinner"></div>
-      <span>{{ _("Loading secure payment form…") }}</span>
-    </div>
     <iframe
       id="authorize-net-iframe"
       name="authorize-net-iframe"
       src=""
-      style="display:none;"
       scrolling="no"
     ></iframe>
   </div>
@@ -207,7 +179,6 @@
 
 </div>
 
-{# Hidden form that POSTs to Authorize.Net to get the iframe token loaded #}
 {% if not cancelled %}
 <form
   id="authnet-form"
@@ -221,43 +192,24 @@
 
 <script>
   (function () {
-    // Submit the hidden form to load the hosted payment page into the iframe
-    var form = document.getElementById("authnet-form");
     var iframe = document.getElementById("authorize-net-iframe");
     var overlay = document.getElementById("loading-overlay");
 
-    form.submit();
+    // Submit the hidden form — POSTs the token to Authorize.Net,
+    // which renders the hosted payment form inside the iframe.
+    document.getElementById("authnet-form").submit();
 
-    // Once the iframe begins loading, show it and hide the spinner
-    iframe.addEventListener("load", function () {
-      overlay.style.display = "none";
-      iframe.style.display = "block";
-    });
-
-    // Fallback: show iframe after 3 seconds regardless
-    setTimeout(function () {
-      overlay.style.display = "none";
-      iframe.style.display = "block";
-    }, 3000);
-
-    // Listen for resize messages from Authorize.Net communicator
-    // so the iframe height adjusts dynamically
+    // Listen for postMessage events from Authorize.Net communicator
+    // to resize the iframe dynamically as the form renders.
     window.addEventListener("message", function (event) {
       if (event.data && typeof event.data === "string") {
         try {
           var msg = JSON.parse(event.data);
           if (msg.action === "resize") {
-            iframe.style.height = msg.height + "px";
-            iframe.style.minHeight = msg.height + "px";
-          }
-          // Authorize.Net sends "successfulSave" when payment completes
-          // The redirect is handled server-side via the return URL we set,
-          // but we can show a brief message here as a fallback.
-          if (msg.action === "successfulSave" || msg.action === "cancel") {
-            // Handled by Authorize.Net redirect — no action needed client-side
+            iframe.style.height = (parseInt(msg.height) + 20) + "px";
           }
         } catch (e) {
-          // Non-JSON postMessage from another origin — ignore
+          // Non-JSON postMessage — ignore
         }
       }
     }, false);
