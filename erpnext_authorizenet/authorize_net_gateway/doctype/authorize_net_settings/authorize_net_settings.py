@@ -8,14 +8,15 @@ Implements the standard Frappe payment gateway interface:
   - validate_transaction_currency()
   - create_request()           -> stores an Integration Request for this transaction
   - get_hosted_payment_token() -> calls Authorize.Net API for a hosted payment page token
-  - handle_payment_callback()  -> processes the webhook/redirect from Authorize.Net
+  - handle_payment_callback()  -> processes the Silent Post from Authorize.Net
 
 Authorize.Net Accept Hosted flow:
   1. ERPNext calls get_payment_url() -> we store an Integration Request and return a checkout URL
   2. Customer lands on /authorizenet_checkout, which calls get_hosted_payment_token()
   3. Our checkout page POSTs the token to Authorize.Net's hosted form inside an iframe
-  4. Authorize.Net posts result back to handle_payment_callback
-  5. We create a Payment Entry and mark the invoice paid
+  4. Authorize.Net Silent Posts result to handle_payment_callback (server-to-server)
+  5. We match the transaction to an Integration Request via the description field
+  6. We create a Payment Entry and mark the invoice paid
 """
 
 import json
@@ -214,38 +215,68 @@ class AuthorizeNetSettings(frappe.model.document.Document):
 @frappe.whitelist(allow_guest=True)
 def handle_payment_callback(**kwargs):
 	"""
-	Authorize.Net posts here after payment.
-	responseCode 1=Approved, 2=Declined, 3=Error, 4=Held for review
+	Handles both:
+	1. Authorize.Net Silent Post (server-to-server) -- uses x_ prefixed fields
+	2. Authorize.Net hosted page redirect -- uses camelCase fields
+
+	Silent Post fields: x_response_code, x_trans_id, x_description
+	Redirect fields: responseCode, transId, refId
 	"""
 	form = frappe.request.form if hasattr(frappe, "request") else frappe._dict(kwargs)
 
-	transaction_id = form.get("transId") or kwargs.get("transId")
-	response_code = str(form.get("responseCode") or kwargs.get("responseCode") or "")
+	# Log the full form data for debugging
+	frappe.log_error(
+		title="Authorize.Net Callback Received",
+		message=str(dict(form)),
+	)
+
+	# Support both Silent Post (x_ prefix) and hosted page redirect fields
+	transaction_id = (
+		form.get("x_trans_id") or
+		form.get("transId") or
+		kwargs.get("transId") or ""
+	)
+	response_code = str(
+		form.get("x_response_code") or
+		form.get("responseCode") or
+		kwargs.get("responseCode") or ""
+	)
+
+	# Try to find Integration Request via refId first, then via description
 	ref_id = form.get("refId") or kwargs.get("refId")
+	integration_request = None
 
-	if not ref_id:
-		frappe.log_error(
-			title="Authorize.Net Callback: Missing refId",
-			message=str(dict(form)),
-		)
-		frappe.respond_as_web_page(
-			_("Payment Error"),
-			_("Could not identify the payment record. Contact support with Transaction ID: {0}").format(transaction_id),
-			indicator_color="red",
-		)
-		return
+	if ref_id:
+		try:
+			integration_request = frappe.get_doc("Integration Request", ref_id)
+		except frappe.DoesNotExistError:
+			pass
 
-	try:
-		integration_request = frappe.get_doc("Integration Request", ref_id)
-	except frappe.DoesNotExistError:
+	if not integration_request:
+		# Fall back to matching via x_description (Silent Post)
+		description = form.get("x_description") or ""
+		# description is like "Payment Request for ACC-SINV-2026-00005"
+		ref_docname = description.replace("Payment Request for ", "").strip()
+
+		if ref_docname:
+			results = frappe.get_all(
+				"Integration Request",
+				filters={
+					"reference_docname": ref_docname,
+					"status": "Queued",
+					"integration_request_service": ["like", "Authorize.Net-%"],
+				},
+				order_by="creation desc",
+				limit=1,
+				pluck="name",
+			)
+			if results:
+				integration_request = frappe.get_doc("Integration Request", results[0])
+
+	if not integration_request:
 		frappe.log_error(
 			title="Authorize.Net Callback: Integration Request not found",
-			message=f"ref_id={ref_id}, transId={transaction_id}",
-		)
-		frappe.respond_as_web_page(
-			_("Payment Error"),
-			_("Payment record not found. Please contact support."),
-			indicator_color="red",
+			message=f"transId={transaction_id}, form={dict(form)}",
 		)
 		return
 
@@ -253,27 +284,20 @@ def handle_payment_callback(**kwargs):
 
 	if response_code == "1":
 		_finalize_payment(integration_request, data, transaction_id)
-		frappe.local.response["type"] = "redirect"
-		frappe.local.response["location"] = get_url(
-			f"./payment-success?doctype={data.get('reference_doctype')}&docname={data.get('reference_docname')}"
-		)
+		# Only redirect for hosted page callbacks, not Silent Post
+		if form.get("refId") or kwargs.get("refId"):
+			frappe.local.response["type"] = "redirect"
+			frappe.local.response["location"] = get_url(
+				f"./payment-success?doctype={data.get('reference_doctype')}&docname={data.get('reference_docname')}"
+			)
 
 	elif response_code == "4":
 		integration_request.db_set("status", "Pending", update_modified=False)
 		frappe.db.commit()
-		frappe.local.response["type"] = "redirect"
-		frappe.local.response["location"] = get_url(
-			f"./payment-success?doctype={data.get('reference_doctype')}&docname={data.get('reference_docname')}&pending=1"
-		)
 
 	else:
 		integration_request.db_set("status", "Failed", update_modified=False)
 		frappe.db.commit()
-		frappe.respond_as_web_page(
-			_("Payment Declined"),
-			_("Your payment was not approved. Please try again or contact your bank. Transaction ID: {0}").format(transaction_id),
-			indicator_color="red",
-		)
 
 
 def _finalize_payment(integration_request, data, transaction_id):
