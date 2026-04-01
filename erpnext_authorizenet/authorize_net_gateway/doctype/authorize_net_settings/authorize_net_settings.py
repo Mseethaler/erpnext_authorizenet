@@ -38,7 +38,7 @@ SUPPORTED_CURRENCIES = [
 
 class AuthorizeNetSettings(frappe.model.document.Document):
 
-	def validate(self):
+	def on_update(self):
 		"""Called after Save. Registers this gateway instance with the Frappe payments system."""
 		self._register_gateway()
 		call_hook_method("payment_gateway_enabled", gateway=f"Authorize.Net-{self.gateway_name}")
