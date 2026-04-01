@@ -317,8 +317,14 @@ def _finalize_payment(integration_request, data, transaction_id):
 		frappe.db.commit()
 
 		if data.get("reference_doctype") == "Payment Request":
-			payment_request = frappe.get_doc("Payment Request", data.get("reference_docname"))
-			payment_request.run_method("on_payment_authorized", "Completed")
+			payment_request = frappe.get_doc(
+				"Payment Request", data.get("reference_docname")
+			)
+			# Mark Payment Request as paid
+			payment_request.db_set("status", "Paid", update_modified=False)
+			frappe.db.commit()
+			# Create and submit the Payment Entry
+			payment_request.create_payment_entry(submit=True)
 			frappe.db.commit()
 
 	except Exception as e:
