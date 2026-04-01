@@ -187,7 +187,7 @@
   target="authorize-net-iframe"
   style="display:none;"
 >
-  <input type="hidden" name="token" value="{{ token }}" />
+  <input type="hidden" name="token" value="{{ token | e }}" />
 </form>
 
 <script>
