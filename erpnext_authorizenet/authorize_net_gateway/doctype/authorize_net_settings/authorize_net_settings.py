@@ -214,11 +214,7 @@ class AuthorizeNetSettings(frappe.model.document.Document):
 			)
 			frappe.throw(_("Could not connect to Authorize.Net. Please try again or contact support."))
 
-		result = response.json()
-
-		# Authorize.Net can return BOM characters — strip them
-		if isinstance(result, str):
-			result = json.loads(result.lstrip("\ufeff"))
+		result = json.loads(response.content.decode("utf-8-sig"))
 
 		messages = result.get("messages", {})
 		if messages.get("resultCode") == "Error":
