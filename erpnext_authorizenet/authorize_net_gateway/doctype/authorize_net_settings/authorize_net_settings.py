@@ -93,7 +93,6 @@ class AuthorizeNetSettings(frappe.model.document.Document):
 			"erpnext_authorizenet.authorize_net_gateway.doctype"
 			".authorize_net_settings.authorize_net_settings.handle_payment_callback"
 		)
-		cancel_url = f"{base_url}/authorizenet_checkout?cancelled=1"
 
 		amount = data.get("amount") or data.get("grand_total")
 		description = data.get("description") or f"Payment for {data.get('reference_docname', '')}"
@@ -122,8 +121,6 @@ class AuthorizeNetSettings(frappe.model.document.Document):
 								"showReceipt": False,
 								"url": return_url,
 								"urlText": "Continue",
-								"cancelUrl": cancel_url,
-								"cancelUrlText": "Cancel",
 							}),
 						},
 						{
