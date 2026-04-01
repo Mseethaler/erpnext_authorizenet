@@ -3,24 +3,25 @@
 {% block title %}{{ _("Secure Payment") }}{% endblock %}
 
 {% block head_include %}
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
   body {
     background: #f5f5f5;
   }
 
   .payment-wrapper {
-    max-width: 900px;
-    margin: 40px auto;
-    padding: 0 16px 60px;
+    max-width: 760px;
+    margin: 24px auto;
+    padding: 0 12px 60px;
   }
 
   .payment-header {
     text-align: center;
-    margin-bottom: 24px;
+    margin-bottom: 20px;
   }
 
   .payment-header h2 {
-    font-size: 1.3rem;
+    font-size: 1.2rem;
     font-weight: 600;
     color: #1a1a1a;
     margin: 0 0 4px;
@@ -28,15 +29,15 @@
 
   .payment-header .payment-subtext {
     color: #666;
-    font-size: 0.95rem;
+    font-size: 0.9rem;
   }
 
   .payment-amount-card {
     background: #fff;
     border: 1px solid #e0e0e0;
     border-radius: 8px;
-    padding: 18px 24px;
-    margin-bottom: 20px;
+    padding: 16px 20px;
+    margin-bottom: 16px;
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -48,7 +49,7 @@
   }
 
   .payment-amount-card .amount {
-    font-size: 1.5rem;
+    font-size: 1.4rem;
     font-weight: 700;
     color: #1a1a1a;
   }
@@ -57,16 +58,37 @@
     background: #fff;
     border: 1px solid #e0e0e0;
     border-radius: 8px;
-    overflow: visible;
-    min-height: 1000px;
+    overflow-x: auto;
+    overflow-y: visible;
+    -webkit-overflow-scrolling: touch;
   }
 
   #authorize-net-iframe {
     width: 100%;
-    min-width: 600px;
+    min-width: 320px;
     height: 900px;
     border: none;
     display: block;
+  }
+
+  @media (max-width: 600px) {
+    .payment-wrapper {
+      margin: 12px auto;
+      padding: 0 8px 40px;
+    }
+
+    .payment-header h2 {
+      font-size: 1rem;
+    }
+
+    .payment-amount-card .amount {
+      font-size: 1.2rem;
+    }
+
+    #authorize-net-iframe {
+      min-width: 100%;
+      height: 850px;
+    }
   }
 
   .sandbox-badge {
@@ -83,8 +105,8 @@
   .secure-note {
     text-align: center;
     color: #888;
-    font-size: 0.8rem;
-    margin-top: 14px;
+    font-size: 0.78rem;
+    margin-top: 12px;
   }
 
   .secure-note svg {
@@ -120,7 +142,7 @@
     display: none;
     position: fixed;
     top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(255,255,255,0.85);
+    background: rgba(255,255,255,0.92);
     z-index: 9999;
     flex-direction: column;
     align-items: center;
@@ -147,7 +169,7 @@
 
   .processing-text {
     font-size: 1rem;
-    color: #555;
+    color: #444;
     font-weight: 500;
   }
 </style>
@@ -155,7 +177,6 @@
 
 {% block page_content %}
 
-<!-- Processing overlay shown while polling for completion -->
 <div class="processing-overlay" id="processing-overlay">
   <div class="spinner"></div>
   <div class="processing-text">{{ _("Processing your payment…") }}</div>
@@ -227,12 +248,12 @@
     var reqName = "{{ integration_request }}";
     var successUrl = "/payment-success";
     var pollTimer = null;
-    var pollStarted = false;
 
-    // Submit the hidden form to load Authorize.Net hosted payment page
+    // Submit the hidden form — loads Authorize.Net hosted form inside the iframe
     document.getElementById("authnet-form").submit();
 
-    // Listen for postMessage events from Authorize.Net communicator
+    // Listen for postMessage events from Authorize.Net communicator.
+    // Only start polling when Authorize.Net signals the payment was submitted.
     window.addEventListener("message", function (event) {
       if (event.data && typeof event.data === "string") {
         try {
@@ -240,7 +261,6 @@
           if (msg.action === "resize") {
             iframe.style.height = (parseInt(msg.height) + 20) + "px";
           }
-          // When Authorize.Net signals the form was submitted successfully
           if (msg.action === "successfulSave" || msg.action === "transactResponse") {
             startPolling();
           }
@@ -249,17 +269,6 @@
         }
       }
     }, false);
-
-    // Also start polling when the iframe navigates (form submitted)
-    iframe.addEventListener("load", function() {
-      // Only start polling after the initial load (not on first render)
-      if (pollStarted) return;
-      // Small delay to let the transaction process
-      setTimeout(function() {
-        startPolling();
-      }, 3000);
-      pollStarted = true;
-    });
 
     function startPolling() {
       if (pollTimer) return; // already polling
@@ -270,7 +279,7 @@
           method: "GET",
           headers: {
             "Accept": "application/json",
-            "X-Frappe-CSRF-Token": frappe && frappe.csrf_token ? frappe.csrf_token : ""
+            "X-Frappe-CSRF-Token": (typeof frappe !== "undefined" && frappe.csrf_token) ? frappe.csrf_token : ""
           }
         })
         .then(function (r) { return r.json(); })
@@ -278,20 +287,21 @@
           var status = data.data && data.data.status;
           if (status === "Completed") {
             clearInterval(pollTimer);
+            pollTimer = null;
             overlay.classList.remove("active");
             window.location.href = successUrl;
           } else if (status === "Failed") {
             clearInterval(pollTimer);
+            pollTimer = null;
             overlay.classList.remove("active");
             document.getElementById("iframe-card").innerHTML =
               "<div style='padding:60px 24px;text-align:center;'>" +
-              "<div style='font-size:48px;margin-bottom:16px;'>✗</div>" +
+              "<div style='font-size:48px;margin-bottom:16px;color:#c62828;'>✗</div>" +
               "<h3 style='color:#c62828;margin-bottom:8px;'>Payment Declined</h3>" +
               "<p style='color:#555;'>Your payment was not approved. Please try again.</p>" +
-              "<a href='javascript:location.reload()' style='display:inline-block;margin-top:16px;color:#1a73e8;'>Try again</a>" +
+              "<a href='javascript:location.reload()' style='display:inline-block;margin-top:16px;color:#1a73e8;text-decoration:none;font-weight:500;'>← Try again</a>" +
               "</div>";
           }
-          // If still Queued, keep polling
         })
         .catch(function () {
           // Network error — keep trying
@@ -302,6 +312,7 @@
       setTimeout(function () {
         if (pollTimer) {
           clearInterval(pollTimer);
+          pollTimer = null;
           overlay.classList.remove("active");
         }
       }, 180000);
