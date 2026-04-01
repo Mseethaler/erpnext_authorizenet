@@ -15,7 +15,7 @@ Authorize.Net Accept Hosted flow:
   2. Customer lands on /authorizenet_checkout, which calls get_hosted_payment_token()
   3. Our checkout page POSTs the token to Authorize.Net's hosted form inside an iframe
   4. Authorize.Net Silent Posts result to handle_payment_callback (server-to-server)
-  5. We match the transaction to an Integration Request via the description field
+  5. We match the transaction to an Integration Request by scanning the data JSON description
   6. We create a Payment Entry and mark the invoice paid
 """
 
@@ -242,7 +242,7 @@ def handle_payment_callback(**kwargs):
 		kwargs.get("responseCode") or ""
 	)
 
-	# Try to find Integration Request via refId first, then via description
+	# Try to find Integration Request via refId first
 	ref_id = form.get("refId") or kwargs.get("refId")
 	integration_request = None
 
@@ -253,30 +253,36 @@ def handle_payment_callback(**kwargs):
 			pass
 
 	if not integration_request:
-		# Fall back to matching via x_description (Silent Post)
+		# Fall back: scan recent Queued Authorize.Net Integration Requests
+		# and match by the description stored in their data JSON field
 		description = form.get("x_description") or ""
-		# description is like "Payment Request for ACC-SINV-2026-00005"
-		ref_docname = description.replace("Payment Request for ", "").strip()
 
-		if ref_docname:
-			results = frappe.get_all(
+		if description:
+			candidates = frappe.get_all(
 				"Integration Request",
 				filters={
-					"reference_docname": ref_docname,
 					"status": "Queued",
 					"integration_request_service": ["like", "Authorize.Net-%"],
 				},
+				fields=["name", "data"],
 				order_by="creation desc",
-				limit=1,
-				pluck="name",
+				limit=20,
 			)
-			if results:
-				integration_request = frappe.get_doc("Integration Request", results[0])
+			for candidate in candidates:
+				try:
+					candidate_data = json.loads(candidate.data or "{}")
+					if candidate_data.get("description") == description:
+						integration_request = frappe.get_doc(
+							"Integration Request", candidate.name
+						)
+						break
+				except Exception:
+					continue
 
 	if not integration_request:
 		frappe.log_error(
 			title="Authorize.Net Callback: Integration Request not found",
-			message=f"transId={transaction_id}, form={dict(form)}",
+			message=f"transId={transaction_id}, description={form.get('x_description')}, form={dict(form)}",
 		)
 		return
 
