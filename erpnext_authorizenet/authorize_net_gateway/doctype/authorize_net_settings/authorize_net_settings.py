@@ -325,6 +325,8 @@ def _finalize_payment(integration_request, data, transaction_id):
 			payment_request.db_set("status", "Paid", update_modified=False)
 			frappe.db.commit()
 			# Create and submit the Payment Entry
+			# Callback runs as guest so we need elevated permissions
+			frappe.set_user("Administrator")
 			payment_request.create_payment_entry(submit=True)
 			frappe.db.commit()
 
