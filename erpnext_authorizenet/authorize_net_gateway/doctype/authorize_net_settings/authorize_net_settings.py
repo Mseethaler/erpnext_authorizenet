@@ -13,10 +13,11 @@ Implements the standard Frappe payment gateway interface:
 Authorize.Net Accept Hosted flow:
   1. ERPNext calls get_payment_url() -> we store an Integration Request and return a checkout URL
   2. Customer lands on /authorizenet_checkout, which calls get_hosted_payment_token()
-  3. Our checkout page POSTs the token to Authorize.Net's hosted form inside an iframe
-  4. Authorize.Net Silent Posts result to handle_payment_callback (server-to-server)
-  5. We match the transaction to an Integration Request by scanning the data JSON description
-  6. We create a Payment Entry and mark the invoice paid
+  3. Our checkout page POSTs the token to Authorize.Net's hosted form
+  4. Authorize.Net processes payment and shows their receipt page
+  5. Authorize.Net Silent Posts result to handle_payment_callback (server-to-server)
+  6. We match the transaction to an Integration Request by scanning the data JSON description
+  7. We create a Payment Entry and mark the invoice paid
 """
 
 import json
@@ -81,7 +82,7 @@ class AuthorizeNetSettings(frappe.model.document.Document):
 	def get_hosted_payment_token(self, integration_request_name):
 		"""
 		Calls the Authorize.Net API to get a hosted payment page token.
-		Token is short-lived (~15 min) and used to POST to the hosted payment iframe.
+		Token is short-lived (~15 min) and used to POST to the hosted payment page.
 		"""
 		integration_request = frappe.get_doc("Integration Request", integration_request_name)
 		data = frappe._dict(json.loads(integration_request.data))
@@ -89,12 +90,6 @@ class AuthorizeNetSettings(frappe.model.document.Document):
 		api_url = AUTHNET_SANDBOX_URL if self.sandbox_mode else AUTHNET_LIVE_URL
 		transaction_key = self.get_password("transaction_key")
 		base_url = get_url()
-
-		return_url = (
-			f"{base_url}/api/method/"
-			"erpnext_authorizenet.authorize_net_gateway.doctype"
-			".authorize_net_settings.authorize_net_settings.handle_payment_callback"
-		)
 
 		amount = data.get("amount") or data.get("grand_total")
 		description = data.get("description") or f"Payment for {data.get('reference_docname', '')}"
@@ -120,9 +115,7 @@ class AuthorizeNetSettings(frappe.model.document.Document):
 						{
 							"settingName": "hostedPaymentReturnOptions",
 							"settingValue": json.dumps({
-								"showReceipt": False,
-								"url": return_url,
-								"urlText": "Continue",
+								"showReceipt": True,
 							}),
 						},
 						{
@@ -162,12 +155,6 @@ class AuthorizeNetSettings(frappe.model.document.Document):
 								"showEmail": False,
 								"requiredEmail": False,
 								"addPaymentProfile": False,
-							}),
-						},
-						{
-							"settingName": "hostedPaymentIFrameCommunicatorUrl",
-							"settingValue": json.dumps({
-								"url": f"{base_url}/assets/erpnext_authorizenet/js/authorizenet_communicator.html"
 							}),
 						},
 					]
@@ -216,22 +203,13 @@ class AuthorizeNetSettings(frappe.model.document.Document):
 @frappe.whitelist(allow_guest=True)
 def handle_payment_callback(**kwargs):
 	"""
-	Handles both:
-	1. Authorize.Net Silent Post (server-to-server) -- uses x_ prefixed fields
-	2. Authorize.Net hosted page redirect -- uses camelCase fields
-
-	Silent Post fields: x_response_code, x_trans_id, x_description
-	Redirect fields: responseCode, transId, refId
+	Receives Authorize.Net Silent Post (server-to-server) after payment.
+	Silent Post fields use x_ prefix: x_response_code, x_trans_id, x_description
 	"""
 	form = frappe.request.form if hasattr(frappe, "request") else frappe._dict(kwargs)
 
-	# Log the full form data for debugging
-	frappe.log_error(
-		title="Authorize.Net Callback Received",
-		message=str(dict(form)),
-	)
+	frappe.logger().debug(f"Authorize.Net Callback Received: {str(dict(form))}")
 
-	# Support both Silent Post (x_ prefix) and hosted page redirect fields
 	transaction_id = (
 		form.get("x_trans_id") or
 		form.get("transId") or
@@ -291,12 +269,6 @@ def handle_payment_callback(**kwargs):
 
 	if response_code == "1":
 		_finalize_payment(integration_request, data, transaction_id)
-		# Only redirect for hosted page callbacks, not Silent Post
-		if form.get("refId") or kwargs.get("refId"):
-			frappe.local.response["type"] = "redirect"
-			frappe.local.response["location"] = get_url(
-				f"./payment-success?doctype={data.get('reference_doctype')}&docname={data.get('reference_docname')}"
-			)
 
 	elif response_code == "4":
 		integration_request.db_set("status", "Pending", update_modified=False)
