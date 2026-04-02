@@ -10,18 +10,14 @@
   }
 
   .payment-wrapper {
-    max-width: 760px;
-    margin: 24px auto;
-    padding: 0 12px 60px;
-  }
-
-  .payment-header {
+    max-width: 600px;
+    margin: 60px auto;
+    padding: 0 16px 60px;
     text-align: center;
-    margin-bottom: 20px;
   }
 
   .payment-header h2 {
-    font-size: 1.2rem;
+    font-size: 1.3rem;
     font-weight: 600;
     color: #1a1a1a;
     margin: 0 0 4px;
@@ -30,6 +26,7 @@
   .payment-header .payment-subtext {
     color: #666;
     font-size: 0.9rem;
+    margin-bottom: 8px;
   }
 
   .payment-amount-card {
@@ -37,7 +34,7 @@
     border: 1px solid #e0e0e0;
     border-radius: 8px;
     padding: 16px 20px;
-    margin-bottom: 16px;
+    margin: 20px 0;
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -54,41 +51,23 @@
     color: #1a1a1a;
   }
 
-  .iframe-card {
-    background: #fff;
-    border: 1px solid #e0e0e0;
-    border-radius: 8px;
-    overflow-x: auto;
-    overflow-y: visible;
-    -webkit-overflow-scrolling: touch;
-  }
-
-  #authorize-net-iframe {
-    width: 100%;
-    min-width: 320px;
-    height: 900px;
+  .pay-btn {
+    display: inline-block;
+    background: #1a73e8;
+    color: #fff;
     border: none;
-    display: block;
+    border-radius: 6px;
+    padding: 14px 40px;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    margin-top: 8px;
+    width: 100%;
+    max-width: 320px;
   }
 
-  @media (max-width: 600px) {
-    .payment-wrapper {
-      margin: 12px auto;
-      padding: 0 8px 40px;
-    }
-
-    .payment-header h2 {
-      font-size: 1rem;
-    }
-
-    .payment-amount-card .amount {
-      font-size: 1.2rem;
-    }
-
-    #authorize-net-iframe {
-      min-width: 100%;
-      height: 850px;
-    }
+  .pay-btn:hover {
+    background: #1558b0;
   }
 
   .sandbox-badge {
@@ -103,10 +82,9 @@
   }
 
   .secure-note {
-    text-align: center;
     color: #888;
     font-size: 0.78rem;
-    margin-top: 12px;
+    margin-top: 16px;
   }
 
   .secure-note svg {
@@ -120,6 +98,7 @@
     border-radius: 8px;
     padding: 40px 24px;
     text-align: center;
+    margin-top: 20px;
   }
 
   .cancelled-card h3 {
@@ -138,50 +117,15 @@
     text-decoration: none;
   }
 
-  .processing-overlay {
-    display: none;
-    position: fixed;
-    top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(255,255,255,0.92);
-    z-index: 9999;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 16px;
-  }
-
-  .processing-overlay.active {
-    display: flex;
-  }
-
-  .spinner {
-    width: 48px;
-    height: 48px;
-    border: 4px solid #e0e0e0;
-    border-top-color: #1a73e8;
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-  }
-
-  @keyframes spin {
-    to { transform: rotate(360deg); }
-  }
-
-  .processing-text {
-    font-size: 1rem;
-    color: #444;
-    font-weight: 500;
+  @media (max-width: 480px) {
+    .payment-wrapper {
+      margin: 24px auto;
+    }
   }
 </style>
 {% endblock %}
 
 {% block page_content %}
-
-<div class="processing-overlay" id="processing-overlay">
-  <div class="spinner"></div>
-  <div class="processing-text">{{ _("Processing your payment…") }}</div>
-</div>
-
 <div class="payment-wrapper">
 
   {% if cancelled %}
@@ -209,14 +153,17 @@
     <span class="amount">{{ frappe.utils.fmt_money(amount, currency=currency) }}</span>
   </div>
 
-  <div class="iframe-card" id="iframe-card">
-    <iframe
-      id="authorize-net-iframe"
-      name="authorize-net-iframe"
-      src=""
-      scrolling="no"
-    ></iframe>
-  </div>
+  <form
+    id="authnet-form"
+    method="POST"
+    action="{{ hosted_form_url }}"
+    target="_top"
+  >
+    <input type="hidden" name="token" value="{{ token | e }}" />
+    <button type="submit" class="pay-btn">
+      {{ _("Pay Now") }} — {{ frappe.utils.fmt_money(amount, currency=currency) }}
+    </button>
+  </form>
 
   <div class="secure-note">
     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -229,102 +176,4 @@
   {% endif %}
 
 </div>
-
-{% if not cancelled %}
-<form
-  id="authnet-form"
-  method="POST"
-  action="{{ hosted_form_url }}"
-  target="authorize-net-iframe"
-  style="display:none;"
->
-  <input type="hidden" name="token" value="{{ token | e }}" />
-</form>
-
-<script>
-  (function () {
-    var iframe = document.getElementById("authorize-net-iframe");
-    var overlay = document.getElementById("processing-overlay");
-    var reqName = "{{ integration_request }}";
-    var successUrl = "/payment-success";
-    var pollTimer = null;
-
-    // Submit the hidden form — loads Authorize.Net hosted form inside the iframe
-    document.getElementById("authnet-form").submit();
-    
-    // Fallback: start polling 8 seconds after form submit
-    // in case postMessage from communicator is blocked
-    setTimeout(function() {
-      startPolling();
-    }, 8000);
-
-    // Listen for postMessage events from Authorize.Net communicator.
-    // Only start polling when Authorize.Net signals the payment was submitted.
-    window.addEventListener("message", function (event) {
-      if (event.data && typeof event.data === "string") {
-        try {
-          var msg = JSON.parse(event.data);
-          if (msg.action === "resize") {
-            iframe.style.height = (parseInt(msg.height) + 20) + "px";
-          }
-          if (msg.action === "successfulSave" || msg.action === "transactResponse") {
-            startPolling();
-          }
-        } catch (e) {
-          // Non-JSON postMessage — ignore
-        }
-      }
-    }, false);
-
-    function startPolling() {
-      if (pollTimer) return; // already polling
-      overlay.classList.add("active");
-
-      pollTimer = setInterval(function () {
-        fetch("/api/resource/Integration%20Request/" + encodeURIComponent(reqName), {
-          method: "GET",
-          headers: {
-            "Accept": "application/json",
-            "X-Frappe-CSRF-Token": (typeof frappe !== "undefined" && frappe.csrf_token) ? frappe.csrf_token : ""
-          }
-        })
-        .then(function (r) { return r.json(); })
-        .then(function (data) {
-          var status = data.data && data.data.status;
-          if (status === "Completed") {
-            clearInterval(pollTimer);
-            pollTimer = null;
-            overlay.classList.remove("active");
-            window.location.href = successUrl;
-          } else if (status === "Failed") {
-            clearInterval(pollTimer);
-            pollTimer = null;
-            overlay.classList.remove("active");
-            document.getElementById("iframe-card").innerHTML =
-              "<div style='padding:60px 24px;text-align:center;'>" +
-              "<div style='font-size:48px;margin-bottom:16px;color:#c62828;'>✗</div>" +
-              "<h3 style='color:#c62828;margin-bottom:8px;'>Payment Declined</h3>" +
-              "<p style='color:#555;'>Your payment was not approved. Please try again.</p>" +
-              "<a href='javascript:location.reload()' style='display:inline-block;margin-top:16px;color:#1a73e8;text-decoration:none;font-weight:500;'>← Try again</a>" +
-              "</div>";
-          }
-        })
-        .catch(function () {
-          // Network error — keep trying
-        });
-      }, 2000);
-
-      // Stop polling after 3 minutes regardless
-      setTimeout(function () {
-        if (pollTimer) {
-          clearInterval(pollTimer);
-          pollTimer = null;
-          overlay.classList.remove("active");
-        }
-      }, 180000);
-    }
-  })();
-</script>
-{% endif %}
-
 {% endblock %}
