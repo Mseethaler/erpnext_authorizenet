@@ -20,6 +20,7 @@ Authorize.Net Accept Hosted flow:
 """
 
 import json
+import traceback
 import frappe
 import requests
 from frappe import _
@@ -330,5 +331,5 @@ def _finalize_payment(integration_request, data, transaction_id):
 	except Exception as e:
 		frappe.log_error(
 			title="Authorize.Net: Payment finalization error",
-			message=f"Integration Request: {integration_request.name}\nTransaction ID: {transaction_id}\nError: {str(e)}",
+			message=f"Integration Request: {integration_request.name}\nTransaction ID: {transaction_id}\nError: {str(e)}\nTraceback:\n{traceback.format_exc()}",
 		)

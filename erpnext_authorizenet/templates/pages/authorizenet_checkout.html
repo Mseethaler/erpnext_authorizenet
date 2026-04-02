@@ -251,6 +251,12 @@
 
     // Submit the hidden form — loads Authorize.Net hosted form inside the iframe
     document.getElementById("authnet-form").submit();
+    
+    // Fallback: start polling 8 seconds after form submit
+    // in case postMessage from communicator is blocked
+    setTimeout(function() {
+      startPolling();
+    }, 8000);
 
     // Listen for postMessage events from Authorize.Net communicator.
     // Only start polling when Authorize.Net signals the payment was submitted.
