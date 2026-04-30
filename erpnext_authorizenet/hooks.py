@@ -6,11 +6,9 @@ app_email = "service@digital-sovereignty.cc"
 app_license = "MIT"
 app_version = "0.1.0"
 
-# Frappe version compatibility
 required_apps = ["frappe", "erpnext"]
 
-# Website route rules
-# ----------------------------------------------------------
+# Website route rules — for the customer-facing checkout pages
 website_route_rules = [
 	{
 		"from_route": "/authorizenet_checkout",
@@ -26,17 +24,6 @@ website_route_rules = [
 	},
 ]
 
-# Request hooks
-# ----------------------------------------------------------
-# Authorize.Net's webhook URL validator rejects paths with dots, so we
-# expose /authnet_webhook (clean path) and route it internally to the
-# Frappe API method via this before_request hook. This means deployments
-# don't need any nginx-level rewrite — the app itself handles the alias.
-before_request = [
-	"erpnext_authorizenet.api.handle_clean_path_webhook",
-]
-
 # Install / uninstall hooks
-# ----------------------------------------------------------
 after_install = "erpnext_authorizenet.install.after_install"
 before_uninstall = "erpnext_authorizenet.install.before_uninstall"
