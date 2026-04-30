@@ -72,6 +72,7 @@
    "fieldname": "signature_key",
    "fieldtype": "Password",
    "label": "Signature Key",
+   "length": 256,
    "description": "HMAC-SHA512 signature key for webhook verification. Generate in Authorize.Net portal under Account > Settings > API Credentials & Keys > New Signature Key, then add a webhook endpoint and copy the signature key here."
   },
   {
@@ -99,7 +100,7 @@
  "icon": "fa fa-credit-card",
  "is_single": 0,
  "links": [],
- "modified": "2026-04-30 00:00:00.000000",
+ "modified": "2026-04-30 14:15:00.000000",
  "modified_by": "Administrator",
  "module": "Authorize Net Gateway",
  "name": "Authorize Net Settings",
