@@ -13,6 +13,8 @@
   "api_login_id",
   "column_break_credentials",
   "transaction_key",
+  "section_break_webhook",
+  "signature_key",
   "section_break_display",
   "header_image",
   "column_break_display",
@@ -62,6 +64,17 @@
    "description": "Found in Authorize.Net merchant portal under Account > Settings > API Credentials."
   },
   {
+   "fieldname": "section_break_webhook",
+   "fieldtype": "Section Break",
+   "label": "Webhook"
+  },
+  {
+   "fieldname": "signature_key",
+   "fieldtype": "Password",
+   "label": "Signature Key",
+   "description": "HMAC-SHA512 signature key for webhook verification. Generate in Authorize.Net portal under Account > Settings > API Credentials & Keys > New Signature Key, then add a webhook endpoint and copy the signature key here."
+  },
+  {
    "fieldname": "section_break_display",
    "fieldtype": "Section Break",
    "label": "Appearance"
@@ -86,7 +99,7 @@
  "icon": "fa fa-credit-card",
  "is_single": 0,
  "links": [],
- "modified": "2024-01-01 00:00:00.000000",
+ "modified": "2026-04-30 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Authorize Net Gateway",
  "name": "Authorize Net Settings",

@@ -8,18 +8,24 @@ Implements the standard Frappe payment gateway interface:
   - validate_transaction_currency()
   - create_request()           -> stores an Integration Request for this transaction
   - get_hosted_payment_token() -> calls Authorize.Net API for a hosted payment page token
-  - handle_payment_callback()  -> processes the Silent Post from Authorize.Net
+  - handle_payment_callback()  -> processes the signed Webhook from Authorize.Net
 
-Authorize.Net Accept Hosted flow:
+Authorize.Net Accept Hosted flow (Webhook variant):
   1. ERPNext calls get_payment_url() -> we store an Integration Request and return a checkout URL
   2. Customer lands on /authorizenet_checkout, which calls get_hosted_payment_token()
+     The token request includes refId = Integration Request name, which Authorize.Net
+     stores against the transaction as merchantReferenceId.
   3. Our checkout page POSTs the token to Authorize.Net's hosted form
   4. Authorize.Net processes payment and shows their receipt page
-  5. Authorize.Net Silent Posts result to handle_payment_callback (server-to-server)
-  6. We match the transaction to an Integration Request by scanning the data JSON description
-  7. We create a Payment Entry and mark the invoice paid
+  5. Authorize.Net sends a signed JSON Webhook (HMAC-SHA512) to handle_payment_callback
+  6. We verify the signature, fetch full transaction details (which includes refId),
+     match to our Integration Request, and create a Payment Entry
+
+Webhook docs: https://developer.authorize.net/api/reference/features/webhooks.html
 """
 
+import hashlib
+import hmac
 import json
 import traceback
 import frappe
@@ -33,6 +39,18 @@ AUTHNET_LIVE_URL = "https://api.authorize.net/xml/v1/request.api"
 AUTHNET_SANDBOX_URL = "https://apitest.authorize.net/xml/v1/request.api"
 
 SUPPORTED_CURRENCIES = ["USD", "CAD", "GBP", "EUR", "AUD", "NZD"]
+
+# Webhook event types we care about
+EVENT_AUTH_CAPTURE_CREATED = "net.authorize.payment.authcapture.created"
+EVENT_CAPTURE_CREATED = "net.authorize.payment.capture.created"
+EVENT_AUTH_CREATED = "net.authorize.payment.authorization.created"
+EVENT_VOID_CREATED = "net.authorize.payment.void.created"
+EVENT_REFUND_CREATED = "net.authorize.payment.refund.created"
+
+PAYMENT_SUCCESS_EVENTS = {
+	EVENT_AUTH_CAPTURE_CREATED,
+	EVENT_CAPTURE_CREATED,
+}
 
 
 class AuthorizeNetSettings(frappe.model.document.Document):
@@ -83,13 +101,16 @@ class AuthorizeNetSettings(frappe.model.document.Document):
 		"""
 		Calls the Authorize.Net API to get a hosted payment page token.
 		Token is short-lived (~15 min) and used to POST to the hosted payment page.
+
+		IMPORTANT: refId is set to the Integration Request name, which Authorize.Net
+		stores against the transaction as merchantReferenceId. The webhook handler
+		uses this to match callbacks back to ERPNext records.
 		"""
 		integration_request = frappe.get_doc("Integration Request", integration_request_name)
 		data = frappe._dict(json.loads(integration_request.data))
 
 		api_url = AUTHNET_SANDBOX_URL if self.sandbox_mode else AUTHNET_LIVE_URL
 		transaction_key = self.get_password("transaction_key")
-		base_url = get_url()
 
 		amount = data.get("amount") or data.get("grand_total")
 		description = data.get("description") or f"Payment for {data.get('reference_docname', '')}"
@@ -100,6 +121,7 @@ class AuthorizeNetSettings(frappe.model.document.Document):
 					"name": self.api_login_id,
 					"transactionKey": transaction_key,
 				},
+				"refId": integration_request_name[:20],  # Authorize.Net caps refId at 20 chars
 				"transactionRequest": {
 					"transactionType": "authCaptureTransaction",
 					"amount": str(frappe.utils.flt(amount, 2)),
@@ -199,84 +221,263 @@ class AuthorizeNetSettings(frappe.model.document.Document):
 			return "https://test.authorize.net/payment/payment"
 		return "https://accept.authorize.net/payment/payment"
 
+	def fetch_transaction_details(self, transaction_id):
+		"""
+		Calls Authorize.Net getTransactionDetailsRequest to retrieve the full
+		transaction record, including refId (merchantReferenceId), amount,
+		response code, and order description.
+
+		Webhook payloads only include id and entityName, not refId, so we
+		must look up the full record to match it to our Integration Request.
+		"""
+		api_url = self.get_api_url()
+		transaction_key = self.get_password("transaction_key")
+
+		payload = {
+			"getTransactionDetailsRequest": {
+				"merchantAuthentication": {
+					"name": self.api_login_id,
+					"transactionKey": transaction_key,
+				},
+				"transId": str(transaction_id),
+			}
+		}
+
+		try:
+			response = requests.post(
+				api_url,
+				json=payload,
+				timeout=15,
+				headers={"Content-Type": "application/json"},
+			)
+			response.raise_for_status()
+		except requests.exceptions.RequestException as e:
+			frappe.log_error(
+				title="Authorize.Net getTransactionDetails Connection Error",
+				message=str(e),
+			)
+			return None
+
+		try:
+			result = json.loads(response.content.decode("utf-8-sig"))
+		except json.JSONDecodeError as e:
+			frappe.log_error(
+				title="Authorize.Net getTransactionDetails Parse Error",
+				message=f"Body: {response.text}\nError: {e}",
+			)
+			return None
+
+		messages = result.get("messages", {})
+		if messages.get("resultCode") == "Error":
+			error_msgs = messages.get("message", [])
+			error_text = "; ".join(f"{m.get('code')}: {m.get('text')}" for m in error_msgs)
+			frappe.log_error(
+				title="Authorize.Net getTransactionDetails Error",
+				message=f"transId={transaction_id}: {error_text}",
+			)
+			return None
+
+		return result.get("transaction")
+
 
 @frappe.whitelist(allow_guest=True)
 def handle_payment_callback(**kwargs):
 	"""
-	Receives Authorize.Net Silent Post (server-to-server) after payment.
-	Silent Post fields use x_ prefix: x_response_code, x_trans_id, x_description
+	Receives a signed Authorize.Net Webhook (POST with JSON body).
+
+	Headers:
+	  X-ANET-Signature: sha512=HEX  -> HMAC-SHA512 of raw body, keyed by signature_key
+
+	Body (JSON), example for net.authorize.payment.authcapture.created:
+	  {
+	    "notificationId": "uuid",
+	    "eventType": "net.authorize.payment.authcapture.created",
+	    "eventDate": "2026-04-30T...",
+	    "webhookId": "uuid",
+	    "payload": {
+	      "responseCode": 1,
+	      "authCode": "...",
+	      "avsResponse": "Y",
+	      "authAmount": 12.34,
+	      "merchantReferenceId": "<NOT in payload — must fetch via API>",
+	      "id": "<transaction id>",
+	      "entityName": "transaction"
+	    }
+	  }
+
+	Note: the webhook payload itself does NOT include merchantReferenceId,
+	despite some older docs. We must call getTransactionDetailsRequest with
+	the transaction id to retrieve refId.
 	"""
-	form = frappe.request.form if hasattr(frappe, "request") else frappe._dict(kwargs)
+	# Read raw body BEFORE Frappe parses it, since signature is over raw bytes
+	raw_body = frappe.request.get_data() if hasattr(frappe, "request") else b""
 
-	frappe.logger().debug(f"Authorize.Net Callback Received: {str(dict(form))}")
+	if not raw_body:
+		frappe.local.response["http_status_code"] = 400
+		return {"error": "empty body"}
 
-	transaction_id = (
-		form.get("x_trans_id") or
-		form.get("transId") or
-		kwargs.get("transId") or ""
+	# Parse JSON
+	try:
+		body = json.loads(raw_body)
+	except json.JSONDecodeError:
+		frappe.log_error(
+			title="Authorize.Net Webhook: invalid JSON",
+			message=raw_body[:2000],
+		)
+		frappe.local.response["http_status_code"] = 400
+		return {"error": "invalid json"}
+
+	event_type = body.get("eventType", "")
+	payload = body.get("payload", {}) or {}
+	transaction_id = str(payload.get("id") or "")
+
+	if not transaction_id:
+		frappe.log_error(
+			title="Authorize.Net Webhook: missing transaction id",
+			message=json.dumps(body)[:2000],
+		)
+		frappe.local.response["http_status_code"] = 400
+		return {"error": "missing transaction id"}
+
+	# Find the right gateway settings doc by trying each one until signature verifies.
+	# (Multiple gateways may share an account, but typically there's only one.)
+	signature_header = (
+		frappe.get_request_header("X-ANET-Signature") or
+		frappe.get_request_header("x-anet-signature") or
+		""
 	)
-	response_code = str(
-		form.get("x_response_code") or
-		form.get("responseCode") or
-		kwargs.get("responseCode") or ""
+
+	if not signature_header:
+		frappe.log_error(
+			title="Authorize.Net Webhook: missing signature header",
+			message=f"event={event_type}, transId={transaction_id}",
+		)
+		frappe.local.response["http_status_code"] = 401
+		return {"error": "missing signature"}
+
+	settings = _verify_and_get_settings(raw_body, signature_header)
+	if not settings:
+		frappe.log_error(
+			title="Authorize.Net Webhook: signature verification failed",
+			message=f"event={event_type}, transId={transaction_id}",
+		)
+		frappe.local.response["http_status_code"] = 401
+		return {"error": "signature verification failed"}
+
+	# Only act on payment success events. Other events (refunds, voids) can be
+	# wired up later — log them for now so they're visible.
+	if event_type not in PAYMENT_SUCCESS_EVENTS:
+		frappe.logger().info(
+			f"Authorize.Net webhook received but ignored: event={event_type}, transId={transaction_id}"
+		)
+		return {"status": "ignored", "event": event_type}
+
+	# Look up full transaction to get refId (merchantReferenceId)
+	tx_details = settings.fetch_transaction_details(transaction_id)
+	if not tx_details:
+		frappe.log_error(
+			title="Authorize.Net Webhook: could not fetch transaction details",
+			message=f"transId={transaction_id}",
+		)
+		frappe.local.response["http_status_code"] = 500
+		return {"error": "transaction lookup failed"}
+
+	ref_id = tx_details.get("refTransId") or tx_details.get("order", {}).get("invoiceNumber") or ""
+	# refId from the original request comes back as the top-level "refTransId" on
+	# the response in some cases, but the canonical location is the order block's
+	# invoiceNumber when set, OR — for getTransactionDetails responses — the
+	# top-level "refId" of the transaction. Try several known locations.
+	ref_id = (
+		tx_details.get("refId") or
+		tx_details.get("refTransId") or
+		ref_id or
+		""
 	)
 
-	# Try to find Integration Request via refId first
-	ref_id = form.get("refId") or kwargs.get("refId")
+	if not ref_id:
+		frappe.log_error(
+			title="Authorize.Net Webhook: no refId on transaction",
+			message=f"transId={transaction_id}, transaction={json.dumps(tx_details)[:2000]}",
+		)
+		frappe.local.response["http_status_code"] = 200
+		return {"status": "no refId"}
+
+	# Match Integration Request — refId may be truncated to 20 chars, so we use
+	# 'starts with' match if needed.
 	integration_request = None
-
-	if ref_id:
-		try:
-			integration_request = frappe.get_doc("Integration Request", ref_id)
-		except frappe.DoesNotExistError:
-			pass
-
-	if not integration_request:
-		# Fall back: scan recent Queued Authorize.Net Integration Requests
-		# and match by the description stored in their data JSON field
-		description = form.get("x_description") or ""
-
-		if description:
-			candidates = frappe.get_all(
-				"Integration Request",
-				filters={
-					"status": "Queued",
-					"integration_request_service": ["like", "Authorize.Net-%"],
-				},
-				fields=["name", "data"],
-				order_by="creation desc",
-				limit=20,
-			)
-			for candidate in candidates:
-				try:
-					candidate_data = json.loads(candidate.data or "{}")
-					if candidate_data.get("description") == description:
-						integration_request = frappe.get_doc(
-							"Integration Request", candidate.name
-						)
-						break
-				except Exception:
-					continue
+	try:
+		integration_request = frappe.get_doc("Integration Request", ref_id)
+	except frappe.DoesNotExistError:
+		# Try prefix match (refId was truncated)
+		matches = frappe.get_all(
+			"Integration Request",
+			filters={
+				"name": ["like", f"{ref_id}%"],
+				"integration_request_service": ["like", "Authorize.Net-%"],
+			},
+			pluck="name",
+			limit=1,
+		)
+		if matches:
+			integration_request = frappe.get_doc("Integration Request", matches[0])
 
 	if not integration_request:
 		frappe.log_error(
-			title="Authorize.Net Callback: Integration Request not found",
-			message=f"transId={transaction_id}, description={form.get('x_description')}, form={dict(form)}",
+			title="Authorize.Net Webhook: Integration Request not found",
+			message=f"refId={ref_id}, transId={transaction_id}",
 		)
-		return
+		frappe.local.response["http_status_code"] = 200
+		return {"status": "integration request not found"}
+
+	# Idempotency: if already completed, ack and return
+	if integration_request.status == "Completed":
+		return {"status": "already completed"}
 
 	data = frappe._dict(json.loads(integration_request.data))
+	_finalize_payment(integration_request, data, transaction_id)
 
-	if response_code == "1":
-		_finalize_payment(integration_request, data, transaction_id)
+	return {"status": "ok"}
 
-	elif response_code == "4":
-		integration_request.db_set("status", "Pending", update_modified=False)
-		frappe.db.commit()
 
+def _verify_and_get_settings(raw_body, signature_header):
+	"""
+	Try each Authorize Net Settings record's signature_key against the body.
+	Returns the matching settings doc, or None.
+
+	signature_header format: 'sha512=HEXDIGEST'
+	"""
+	if "=" in signature_header:
+		_, _, provided_hex = signature_header.partition("=")
 	else:
-		integration_request.db_set("status", "Failed", update_modified=False)
-		frappe.db.commit()
+		provided_hex = signature_header
+	provided_hex = provided_hex.strip().lower()
+
+	if not provided_hex:
+		return None
+
+	settings_names = frappe.get_all("Authorize Net Settings", pluck="name")
+
+	for name in settings_names:
+		settings = frappe.get_doc("Authorize Net Settings", name)
+		signature_key = settings.get_password("signature_key", raise_exception=False)
+		if not signature_key:
+			continue
+
+		# Authorize.Net signature key is stored as ASCII hex. The HMAC key is
+		# the hex string decoded to bytes.
+		try:
+			key_bytes = bytes.fromhex(signature_key)
+		except ValueError:
+			# If the key isn't hex, fall back to using it as-is (some merchants
+			# paste it in raw form).
+			key_bytes = signature_key.encode("utf-8")
+
+		computed = hmac.new(key_bytes, raw_body, hashlib.sha512).hexdigest().lower()
+
+		if hmac.compare_digest(computed, provided_hex):
+			return settings
+
+	return None
 
 
 def _finalize_payment(integration_request, data, transaction_id):
@@ -297,7 +498,7 @@ def _finalize_payment(integration_request, data, transaction_id):
 			payment_request.db_set("status", "Paid", update_modified=False)
 			frappe.db.commit()
 			# Create and submit the Payment Entry
-			# Callback runs as guest so we need elevated permissions
+			# Webhook runs as guest so we need elevated permissions
 			frappe.set_user("Administrator")
 			payment_request.create_payment_entry(submit=True)
 			frappe.db.commit()
