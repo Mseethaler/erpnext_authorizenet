@@ -8,7 +8,10 @@ app_version = "0.1.0"
 
 required_apps = ["frappe", "erpnext"]
 
-# Website route rules — for the customer-facing checkout pages
+# Website route rules — for the customer-facing checkout pages.
+# Note: /authnet_webhook and /authnet_return are NOT routed here; they are
+# nginx rewrites to API methods (see README), because Authorize.Net rejects
+# URLs containing dots in path segments.
 website_route_rules = [
 	{
 		"from_route": "/authorizenet_checkout",

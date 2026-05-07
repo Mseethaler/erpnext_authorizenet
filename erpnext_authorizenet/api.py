@@ -1,13 +1,14 @@
 """
 api.py
 
-Authorize.Net webhook handler.
+Authorize.Net public endpoints:
+  - authnet_webhook : signed JSON webhook (failsafe path)
+  - authnet_return  : redirect-back from hosted payment form (primary path)
 
-Authorize.Net's webhook URL validator rejects URLs with dots in path
-segments. The standard Frappe API method URL contains dots
+Authorize.Net's URL validators reject URLs with dots in path segments. The
+standard Frappe API method URL contains dots
 (/api/method/erpnext_authorizenet.api.authnet_webhook), so deployments
-should expose a clean path like /authnet_webhook via an nginx rewrite.
-See README for the nginx config snippet.
+expose clean paths via nginx rewrites. See README for the nginx config.
 """
 
 import frappe
@@ -43,3 +44,20 @@ def authnet_webhook(**kwargs):
 		handle_payment_callback,
 	)
 	return handle_payment_callback(**kwargs)
+
+
+@frappe.whitelist(allow_guest=True, methods=["POST", "GET"])
+def authnet_return(**kwargs):
+	"""
+	Authorize.Net redirect-back handler.
+
+	Customer is sent here by the hosted payment form after entering card
+	details. Authorize.Net POSTs the form body containing transId, refId,
+	and response_code. We finalize the payment and redirect to the
+	confirmation page. This is the PRIMARY payment recording path; the
+	webhook acts as a failsafe.
+	"""
+	from erpnext_authorizenet.authorize_net_gateway.doctype.authorize_net_settings.authorize_net_settings import (
+		handle_payment_return,
+	)
+	return handle_payment_return(**kwargs)
