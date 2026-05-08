@@ -23,6 +23,7 @@ import json
 import frappe
 import requests
 from frappe import _
+from frappe.model.document import Document
 from frappe.utils import get_url, call_hook_method
 from urllib.parse import urlencode
 
@@ -33,7 +34,7 @@ NMI_SANDBOX_URL = "https://secure.nmi.com/api/v2/three-step"  # NMI uses the sam
 SUPPORTED_CURRENCIES = ["USD", "CAD"]
 
 
-class NMISettings(frappe.model.document.Document):
+class NMISettings(Document):
 
 	def validate(self):
 		"""Called on Save. Registers this gateway instance."""
