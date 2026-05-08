@@ -449,6 +449,24 @@ def handle_payment_callback(**kwargs):
 	# Read raw body BEFORE Frappe parses it, since signature is over raw bytes
 	raw_body = frappe.request.get_data() if hasattr(frappe, "request") else b""
 
+	# TEMPORARY DEBUG — remove after diagnosis
+	try:
+		frappe.log_error(
+			title="Authorize.Net Webhook DEBUG",
+			message=(
+				f"raw_body_len={len(raw_body)}\n"
+				f"raw_body_first200={raw_body[:200]!r}\n"
+				f"raw_body_last100={raw_body[-100:]!r}\n"
+				f"sig_header={frappe.get_request_header('X-ANET-Signature')!r}\n"
+				f"sig_header_lower={frappe.get_request_header('x-anet-signature')!r}\n"
+				f"content_type={frappe.get_request_header('Content-Type')!r}\n"
+				f"content_encoding={frappe.get_request_header('Content-Encoding')!r}\n"
+				f"content_length={frappe.get_request_header('Content-Length')!r}\n"
+			),
+		)
+	except Exception:
+		pass
+
 	if not raw_body:
 		frappe.local.response["http_status_code"] = 400
 		return {"error": "empty body"}
