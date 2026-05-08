@@ -10,13 +10,14 @@ Implements the standard Frappe payment gateway interface:
   - get_hosted_payment_token() -> calls Authorize.Net API for a hosted payment page token
   - handle_payment_callback()  -> processes the signed Webhook from Authorize.Net (failsafe)
   - handle_payment_return()    -> processes the redirect-back from Authorize.Net (primary)
+  - handle_payment_cancel()    -> processes the cancel-redirect from Authorize.Net
 
 Authorize.Net Accept Hosted flow (redirect-back primary, webhook failsafe):
   1. ERPNext calls get_payment_url() -> we store an Integration Request and return a checkout URL
   2. Customer lands on /authorizenet_checkout, which calls get_hosted_payment_token()
      The token request includes:
        - refId = Integration Request name (Authorize.Net stores as merchantReferenceId)
-       - hostedPaymentReturnOptions with our return URL
+       - hostedPaymentReturnOptions with our return URL and cancel URL
   3. Customer pays on Authorize.Net's hosted form
   4. Authorize.Net POSTs back to /authnet_return with transId + our refId in the form body.
      handle_payment_return() finalizes the payment immediately and redirects the customer
@@ -25,9 +26,11 @@ Authorize.Net Accept Hosted flow (redirect-back primary, webhook failsafe):
      handle_payment_callback() acts as a FAILSAFE for cases where the customer closed
      the browser before the redirect completed. It is idempotent — if the redirect path
      already finalized, it ack's and returns.
+  6. If the customer clicks Cancel, AuthNet redirects to /authnet_cancel which marks the
+     Integration Request as Cancelled and shows a friendly cancellation page.
 
-Both paths converge on _finalize_payment() which is idempotent via Integration Request
-status check.
+Both success paths converge on _finalize_payment() which is idempotent via Integration
+Request status check.
 """
 
 import hashlib
@@ -120,12 +123,14 @@ class AuthorizeNetSettings(frappe.model.document.Document):
 		amount = data.get("amount") or data.get("grand_total")
 		description = data.get("description") or f"Payment for {data.get('reference_docname', '')}"
 
-		# Build return URL — Authorize.Net POSTs here after payment.
-		# We use a clean path (no dots) for consistency with the webhook setup.
+		# Build return + cancel URLs — Authorize.Net redirects here after payment.
+		# Both use clean paths (no dots) for consistency with the webhook setup.
+		# IMPORTANT: keep cancel_url as a single short query param. AuthNet echoes
+		# this URL into inline JS on their hosted page; complex query strings with
+		# multiple `&`-joined params have been observed to break their HTML/JS
+		# escaping and produce a malformed g_pageOptions block.
 		return_url = get_url("/authnet_return")
-		cancel_url = get_url(
-			f"./authorizenet_checkout?{urlencode({'req': integration_request_name, 'gateway': self.gateway_name, 'cancelled': 1})}"
-		)
+		cancel_url = get_url(f"/authnet_cancel?req={integration_request_name}")
 
 		payload = {
 			"getHostedPaymentPageRequest": {
@@ -297,7 +302,7 @@ class AuthorizeNetSettings(frappe.model.document.Document):
 
 
 # ----------------------------------------------------------------------
-# Redirect-back handler (PRIMARY path)
+# Redirect-back handler (PRIMARY success path)
 # ----------------------------------------------------------------------
 
 @frappe.whitelist(allow_guest=True, methods=["POST", "GET"])
@@ -383,6 +388,43 @@ def _redirect_to_success(data):
 
 def _redirect_to_failure(reason):
 	target = get_url(f"/authorizenet_return?{urlencode({'failed': 1, 'reason': reason})}")
+	frappe.local.response["type"] = "redirect"
+	frappe.local.response["location"] = target
+	return
+
+
+# ----------------------------------------------------------------------
+# Cancel-redirect handler (cancellation path)
+# ----------------------------------------------------------------------
+
+@frappe.whitelist(allow_guest=True, methods=["POST", "GET"])
+def handle_payment_cancel(**kwargs):
+	"""
+	Authorize.Net redirects the customer here if they click Cancel on the
+	hosted payment page.
+
+	We mark the Integration Request as Cancelled (only if it's still pending —
+	never clobber a Completed IR, since the webhook may have raced us in an
+	edge case), then redirect to a friendly cancellation page.
+
+	Single short query param `req=<integration_request_name>` — keep this
+	minimal because AuthNet echoes the cancel URL into inline JS on their
+	hosted page and complex URLs have been observed to break their escaping.
+	"""
+	ref_id = (
+		(frappe.form_dict.get("req") if hasattr(frappe, "form_dict") else None)
+		or kwargs.get("req")
+		or ""
+	).strip()
+
+	if ref_id:
+		integration_request = _match_integration_request(ref_id)
+		if integration_request and integration_request.status in ("Queued", "Authorized"):
+			frappe.set_user("Administrator")
+			integration_request.db_set("status", "Cancelled", update_modified=False)
+			frappe.db.commit()
+
+	target = get_url("/authorizenet_return?cancelled=1")
 	frappe.local.response["type"] = "redirect"
 	frappe.local.response["location"] = target
 	return

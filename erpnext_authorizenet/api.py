@@ -4,6 +4,7 @@ api.py
 Authorize.Net public endpoints:
   - authnet_webhook : signed JSON webhook (failsafe path)
   - authnet_return  : redirect-back from hosted payment form (primary path)
+  - authnet_cancel  : redirect-back when customer clicks Cancel on hosted form
 
 Authorize.Net's URL validators reject URLs with dots in path segments. The
 standard Frappe API method URL contains dots
@@ -28,7 +29,6 @@ def authnet_webhook(**kwargs):
 		return {"status": "ok"}
 
 	method = (frappe.request.method or "").upper()
-
 	if method in ("GET", "HEAD"):
 		return {"status": "ok", "service": "authorize.net webhook"}
 
@@ -61,3 +61,18 @@ def authnet_return(**kwargs):
 		handle_payment_return,
 	)
 	return handle_payment_return(**kwargs)
+
+
+@frappe.whitelist(allow_guest=True, methods=["POST", "GET"])
+def authnet_cancel(**kwargs):
+	"""
+	Authorize.Net cancel-redirect handler.
+
+	Customer is sent here when they click Cancel on the hosted payment form.
+	We mark the Integration Request as Cancelled (if still pending) and
+	redirect to the confirmation page with cancelled=1.
+	"""
+	from erpnext_authorizenet.authorize_net_gateway.doctype.authorize_net_settings.authorize_net_settings import (
+		handle_payment_cancel,
+	)
+	return handle_payment_cancel(**kwargs)
