@@ -143,6 +143,7 @@ class AuthorizeNetSettings(frappe.model.document.Document):
 					"transactionType": "authCaptureTransaction",
 					"amount": str(frappe.utils.flt(amount, 2)),
 					"order": {
+                        "invoiceNumber": integration_request_name[:20],
 						"description": description[:255],
 					},
 					"customer": {
