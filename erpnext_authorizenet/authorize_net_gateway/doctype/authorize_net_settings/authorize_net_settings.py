@@ -623,8 +623,8 @@ def _verify_and_get_settings(raw_body, signature_header):
 def _finalize_payment(integration_request, data, transaction_id):
 	"""
 	Convergence point for both redirect and webhook paths.
-	Marks the Integration Request complete, then calls on_payment_authorized
-	on the Payment Request to create and submit the Payment Entry.
+	Marks the Integration Request complete, then calls set_as_paid on the
+	Payment Request to create and submit the Payment Entry.
 
 	Idempotency is enforced by the caller checking IR status before invoking.
 	"""
@@ -641,20 +641,28 @@ def _finalize_payment(integration_request, data, transaction_id):
 			payment_request = frappe.get_doc(
 				"Payment Request", data.get("reference_docname")
 			)
+
 			# Payment Request must be in "Requested" state for create_payment_entry
 			# to proceed. When the gateway URL is fetched (get_payment_url), the
 			# Payment Request transitions to "Initiated". We bump it to
 			# "Requested" before authorizing so the Payment Entry actually gets
-			# created. The NMI handler avoids this because of differences in
-			# its flow; for AuthNet's Accept Hosted, this step is required.
+			# created.
 			if payment_request.status in ("Initiated", "Draft"):
 				payment_request.db_set("status", "Requested", update_modified=False)
 				frappe.db.commit()
 				payment_request.reload()
 
-			# on_payment_authorized handles status transition + Payment Entry
-			# creation in one go, with all the right hooks.
-			payment_request.run_method("on_payment_authorized", "Completed")
+			# Stock ERPNext Payment Request does not implement
+			# on_payment_authorized — that hook only exists on apps that
+			# subclass/override Payment Request (which we don't). Calling
+			# run_method("on_payment_authorized") is a silent no-op and
+			# was the cause of "IR Completed but no Payment Entry".
+			#
+			# Call set_as_paid() directly. It does the right thing:
+			#   - For payment_channel == "Phone": flips PR status to "Paid"
+			#   - Otherwise: creates and submits a Payment Entry against the
+			#     reference doctype (Sales Invoice, etc.)
+			payment_request.set_as_paid()
 			frappe.db.commit()
 
 	except Exception as e:
