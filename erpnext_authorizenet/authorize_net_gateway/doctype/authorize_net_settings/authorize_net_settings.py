@@ -449,62 +449,6 @@ def handle_payment_callback(**kwargs):
 	# Read raw body BEFORE Frappe parses it, since signature is over raw bytes
 	raw_body = frappe.request.get_data() if hasattr(frappe, "request") else b""
 
-	# TEMPORARY DEBUG — remove after diagnosis
-	try:
-		frappe.log_error(
-			title="Authorize.Net Webhook DEBUG",
-			message=(
-				f"raw_body_len={len(raw_body)}\n"
-				f"raw_body_full={raw_body!r}\n"
-				f"raw_body_hex={raw_body.hex()}\n"
-				f"sig_header={frappe.get_request_header('X-ANET-Signature')!r}\n"
-				f"sig_header_lower={frappe.get_request_header('x-anet-signature')!r}\n"
-				f"content_type={frappe.get_request_header('Content-Type')!r}\n"
-				f"content_encoding={frappe.get_request_header('Content-Encoding')!r}\n"
-				f"content_length={frappe.get_request_header('Content-Length')!r}\n"
-			),
-		)
-	except Exception:
-		pass
-
-	# TEMPORARY DEBUG 2 — compute HMACs both ways so we can see what matches
-	try:
-		_dbg_settings_names = frappe.get_all("Authorize Net Settings", pluck="name")
-		_dbg_lines = [f"num_settings={len(_dbg_settings_names)}"]
-		_dbg_provided = ""
-		_dbg_sig = frappe.get_request_header("X-ANET-Signature") or ""
-		if "=" in _dbg_sig:
-			_dbg_provided = _dbg_sig.split("=", 1)[1].strip().lower()
-		_dbg_lines.append(f"provided={_dbg_provided}")
-		for _dbg_name in _dbg_settings_names:
-			_dbg_doc = frappe.get_doc("Authorize Net Settings", _dbg_name)
-			_dbg_key = _dbg_doc.get_password("signature_key", raise_exception=False) or ""
-			_dbg_lines.append(f"---")
-			_dbg_lines.append(f"settings_name={_dbg_name}")
-			_dbg_lines.append(f"key_len={len(_dbg_key)}")
-			_dbg_lines.append(f"key_first8={_dbg_key[:8]}")
-			_dbg_lines.append(f"key_last8={_dbg_key[-8:]}")
-			try:
-				_dbg_key_hex = bytes.fromhex(_dbg_key)
-				_dbg_computed_hex = hmac.new(_dbg_key_hex, raw_body, hashlib.sha512).hexdigest().lower()
-				_dbg_lines.append(f"computed_hexkey={_dbg_computed_hex}")
-				_dbg_lines.append(f"hexkey_match={_dbg_computed_hex == _dbg_provided}")
-			except ValueError as ve:
-				_dbg_lines.append(f"hexkey_decode_error={ve}")
-			_dbg_key_utf8 = _dbg_key.encode("utf-8")
-			_dbg_computed_utf8 = hmac.new(_dbg_key_utf8, raw_body, hashlib.sha512).hexdigest().lower()
-			_dbg_lines.append(f"computed_utf8key={_dbg_computed_utf8}")
-			_dbg_lines.append(f"utf8key_match={_dbg_computed_utf8 == _dbg_provided}")
-		frappe.log_error(
-			title="Authorize.Net Webhook HMAC DEBUG",
-			message="\n".join(_dbg_lines),
-		)
-	except Exception as _dbg_e:
-		frappe.log_error(
-			title="Authorize.Net Webhook HMAC DEBUG ERROR",
-			message=f"{type(_dbg_e).__name__}: {_dbg_e}",
-		)
-
 	if not raw_body:
 		frappe.local.response["http_status_code"] = 400
 		return {"error": "empty body"}
@@ -660,10 +604,12 @@ def _verify_and_get_settings(raw_body, signature_header):
 		if not signature_key:
 			continue
 
-		try:
-			key_bytes = bytes.fromhex(signature_key)
-		except ValueError:
-			key_bytes = signature_key.encode("utf-8")
+		# Authorize.Net signs webhook bodies with HMAC-SHA512 using the signature
+		# key as a UTF-8 string of hex characters — NOT as decoded hex bytes.
+		# Counterintuitive (the key is 128 hex chars and looks like it should be
+		# decoded to 64 raw bytes), but verified empirically against AuthNet's
+		# X-ANET-Signature header. Decoding the hex first produces a wrong HMAC.
+		key_bytes = signature_key.encode("utf-8")
 
 		computed = hmac.new(key_bytes, raw_body, hashlib.sha512).hexdigest().lower()
 
