@@ -641,8 +641,19 @@ def _finalize_payment(integration_request, data, transaction_id):
 			payment_request = frappe.get_doc(
 				"Payment Request", data.get("reference_docname")
 			)
-			# on_payment_authorized handles status transition + Payment Entry creation
-			# in one go, with all the right hooks. Matches the NMI handler pattern.
+			# Payment Request must be in "Requested" state for create_payment_entry
+			# to proceed. When the gateway URL is fetched (get_payment_url), the
+			# Payment Request transitions to "Initiated". We bump it to
+			# "Requested" before authorizing so the Payment Entry actually gets
+			# created. The NMI handler avoids this because of differences in
+			# its flow; for AuthNet's Accept Hosted, this step is required.
+			if payment_request.status in ("Initiated", "Draft"):
+				payment_request.db_set("status", "Requested", update_modified=False)
+				frappe.db.commit()
+				payment_request.reload()
+
+			# on_payment_authorized handles status transition + Payment Entry
+			# creation in one go, with all the right hooks.
 			payment_request.run_method("on_payment_authorized", "Completed")
 			frappe.db.commit()
 
