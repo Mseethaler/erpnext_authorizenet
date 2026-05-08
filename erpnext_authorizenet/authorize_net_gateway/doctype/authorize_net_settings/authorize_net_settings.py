@@ -546,6 +546,9 @@ def handle_payment_callback(**kwargs):
 		return {"status": "already completed"}
 
 	data = frappe._dict(json.loads(integration_request.data))
+	# Run as Administrator — webhook arrives as Guest, but Payment Entry
+	# creation needs higher privileges than Guest carries.
+	frappe.set_user("Administrator")
 	_finalize_payment(integration_request, data, transaction_id)
 
 	return {"status": "ok"}
@@ -623,8 +626,8 @@ def _verify_and_get_settings(raw_body, signature_header):
 def _finalize_payment(integration_request, data, transaction_id):
 	"""
 	Convergence point for both redirect and webhook paths.
-	Marks the Integration Request complete, then calls set_as_paid on the
-	Payment Request to create and submit the Payment Entry.
+	Marks the Integration Request complete, then creates the Payment Entry
+	directly via Payment Request.create_payment_entry().
 
 	Idempotency is enforced by the caller checking IR status before invoking.
 	"""
@@ -652,18 +655,30 @@ def _finalize_payment(integration_request, data, transaction_id):
 				frappe.db.commit()
 				payment_request.reload()
 
-			# Stock ERPNext Payment Request does not implement
-			# on_payment_authorized — that hook only exists on apps that
-			# subclass/override Payment Request (which we don't). Calling
-			# run_method("on_payment_authorized") is a silent no-op and
-			# was the cause of "IR Completed but no Payment Entry".
-			#
-			# Call set_as_paid() directly. It does the right thing:
-			#   - For payment_channel == "Phone": flips PR status to "Paid"
-			#   - Otherwise: creates and submits a Payment Entry against the
-			#     reference doctype (Sales Invoice, etc.)
-			payment_request.set_as_paid()
+			# Call create_payment_entry() directly rather than going through
+			# set_as_paid() or run_method("on_payment_authorized"):
+			#   - on_payment_authorized is a hook other apps may implement on
+			#     the reference doctype (e.g. custom Sales Invoice subclass);
+			#     stock ERPNext does not define it on Payment Request, so
+			#     run_method is a silent no-op.
+			#   - set_as_paid() wraps create_payment_entry() but was observed
+			#     to silently no-op in this deployment, while create_payment_entry()
+			#     called directly works correctly (verified in bench console).
+			# Use create_payment_entry directly for predictable behavior.
+			payment_entry = payment_request.create_payment_entry()
 			frappe.db.commit()
+
+			# Stamp the AuthNet transId on the Payment Entry's reference_no for
+			# downstream reconciliation.
+			if payment_entry and getattr(payment_entry, "name", None):
+				frappe.db.set_value(
+					"Payment Entry",
+					payment_entry.name,
+					"reference_no",
+					transaction_id,
+					update_modified=False,
+				)
+				frappe.db.commit()
 
 	except Exception as e:
 		frappe.log_error(
